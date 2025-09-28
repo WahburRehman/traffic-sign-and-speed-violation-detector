@@ -15,7 +15,7 @@ Built with **Python, YOLOv8, PyTorch, OpenCV, and Streamlit** — this project d
 
 ## 📊 Demo
 👉 Try the live Streamlit app here:  
-[![Streamlit App](https://traffic-sign-and-speed-violation-detector-fseayw3pwclcsxf3tivu.streamlit.app/)]
+[Streamlit App](https://traffic-sign-and-speed-violation-detector-fseayw3pwclcsxf3tivu.streamlit.app/)
 
 ---
 
