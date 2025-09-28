@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+.env.*
+.idea/
+.vscode/
+*.log
+.DS_Store
+# outputs
+outputs/
+tmp/
+# ignore model weights
+*.pt
+models/*.pt
