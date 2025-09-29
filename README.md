@@ -1,4 +1,4 @@
-# 🚦 Traffic Sign & Speed Violation Detector
+# 🚦 Traffic Signs & Speed Violation Detector
 
 A Computer Vision project that detects **traffic signs** in real-time videos and raises **speed violation alerts** using a YOLOv8-based deep learning model.  
 Built with **Python, YOLOv8, PyTorch, OpenCV, and Streamlit** — this project demonstrates how AI can be applied in **intelligent transportation systems**.
