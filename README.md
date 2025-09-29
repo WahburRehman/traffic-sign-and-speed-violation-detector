@@ -34,7 +34,6 @@ This project is trained on a **custom YOLO-format dataset** based on:
 ## 🧠 Model Weights
 The YOLOv8 model is trained on the above dataset with augmentation.  
 You can directly download the trained model weights here:
-
 🔗 [Hugging Face Model Repo](https://huggingface.co/WahburRehman/traffic-sign-detector/tree/main)
 
 ---
