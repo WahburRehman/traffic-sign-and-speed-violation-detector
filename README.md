@@ -53,6 +53,32 @@ You can directly download the trained model weights here:
    - Upload a video or choose a sample  
    - Detection overlay with bounding boxes  
    - Violation logic (speed slider + alerts)  
-   - Results preview & optional CSV export  
+   - Results preview & optional CSV export
 
 ---
+
+## ⚙️ Installation
+**Clone the repository:**
+
+git clone https://github.com/WahburRehman/traffic-sign-and-speed-violation-detector.git
+cd traffic-sign-violation-detector
+
+**Create and activate environment:**
+conda create -n traffic_sign_detection python=3.10 -y
+conda activate traffic_sign_detection
+
+**Install dependencies:**
+pip install -r requirements.txt
+
+---
+
+## 🚀 Usage
+streamlit run app.py
+
+---
+
+## 🙌 Acknowledgements
+- Ultralytics YOLOv8
+- GTSRB Dataset
+- GTSDB Dataset
+- Kaggle & Hugging Face community
