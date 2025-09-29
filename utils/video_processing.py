@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
-import cv2, time, csv, tempfile
+import cv2, time, csv, tempfile, imageio
 
 from utils import draw_box_with_label, eval_rule, overlay_top_banner
 from config import get_device, CONF_THRESH, IOU_THRESH
@@ -37,7 +37,7 @@ def process_video(
     user_speed_kmh: float,
     output_path: str,
     min_box_area_ratio: float = 0.0002,  # 0.02% of frame
-    progress_cb: Optional[ProgressCb] = None,
+    progress_cb: ProgressCb = None,
 ) -> Tuple[Kpis, List[Event]]:
     """
     Core pipeline:
@@ -46,22 +46,10 @@ def process_video(
       - Save annotated MP4
       - Collect events for CSV (timecode, class, conf, bbox, status)
       - Return KPIs + events
-
-    Args:
-        video_path: input video file
-        model_path: path to YOLO .pt weights
-        user_speed_kmh: current vehicle speed to evaluate rules
-        output_path: where to save annotated MP4
-        min_box_area_ratio: skip tiny boxes (relative to frame area)
-        progress_cb: optional callback(processed, total, fps_est) for UI
-
-    Returns:
-        kpis: dict with totals etc.
-        events: list of dict rows for CSV
     """
     # ---- Setup IO ----
     in_path = Path(video_path)
-    out_path = Path(output_path)
+    out_path = Path(output_path).with_suffix(".mp4")  # force .mp4
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     cap = cv2.VideoCapture(str(in_path))
@@ -73,21 +61,20 @@ def process_video(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
+    # Ensure even resolution (H.264 requirement)
     width_even = width - (width % 2)
     height_even = height - (height % 2)
     needs_crop = (width_even != width) or (height_even != height)
 
-    writer = None
-    for cc in ("avc1", "mp4v", "XVID"):
-        w = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*cc), fps, (width_even, height_even))
-        if w.isOpened():
-            writer = w
-            used_codec = cc
-            break
-
-    if writer is None:
-        cap.release()
-        raise RuntimeError(f"Could not open writer for: {out_path} with avc1/mp4v/XVID")
+    # ---- Open writer (imageio-ffmpeg) ----
+    writer = imageio.get_writer(
+        str(out_path),
+        fps=max(fps, 1.0),
+        codec="libx264",
+        format="mp4",
+        bitrate="8M",
+        macro_block_size=1, 
+    )
 
     # ---- Model ----
     device = get_device()
@@ -114,39 +101,33 @@ def process_video(
         if not ok:
             break
 
-        best_banner = None  # (status, text, priority, conf)
+        best_banner = None
         # Run inference
         detections = detector.predict(frame)
 
         for d in detections:
-            # Skip tiny boxes if any
+            # Skip tiny boxes
             if not _tiny_box_filter(d.xyxy, min_box_area):
                 continue
 
             total_detections += 1
-            # Draw all detections (visual evidence)
             draw_box_with_label(frame, d.xyxy, d.cls_name, d.conf)
 
-            # Evaluate rule for banner (e.g., speed limit check)
+            # Evaluate rule for banner
             rule_evaluation = eval_rule(d.cls_name, {"user_speed": float(user_speed_kmh)})
-            # If no rule defined, we still record the detection event
-            status = None
-            text = None
-            priority = -1
+            status, text, priority = None, None, -1
 
             if rule_evaluation is not None:
                 status, text, priority = rule_evaluation
-                # Track highest-priority banner per frame (tie-break by conf)
                 if (best_banner is None) or (priority > best_banner[2]) or (
                     priority == best_banner[2] and d.conf > best_banner[3]
                 ):
                     best_banner = (status, text, priority, d.conf)
 
-                # Violation counting (simple: status == "violation")
                 if status == "violation":
                     total_violations += 1
 
-            # Record an event row for CSV
+            # Record event
             x1, y1, x2, y2 = map(int, d.xyxy)
             timecode_s = (processed / fps) if fps > 0 else None
             events.append(
@@ -156,25 +137,26 @@ def process_video(
                     "class": d.cls_name,
                     "conf": float(d.conf),
                     "bbox": [x1, y1, x2, y2],
-                    "status": status,       # None | "ok" | "warning" | "violation"
-                    "banner_text": text,    # None or human-readable string
+                    "status": status,
+                    "banner_text": text,
                 }
             )
 
-            # Count class frequency for a simple "top-1 violation type"
             top_class_counts[d.cls_name] = top_class_counts.get(d.cls_name, 0) + 1
 
-        # Overlay a single banner if selected for this frame
+        # Overlay banner if selected
         if best_banner is not None:
             overlay_top_banner(frame, best_banner[1], status=best_banner[0])
 
-        # Ensure frame matches writer size if original was odd-sized
+        # Ensure even dimensions
         if needs_crop:
             frame = frame[:height_even, :width_even]
-        # Write annotated frame
-        writer.write(frame)
 
-        # Progress & FPS estimate
+        # Convert to RGB for imageio
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        writer.append_data(rgb)
+
+        # Progress
         processed += 1
         if processed % 10 == 0:
             dt = time.time() - t0
@@ -184,12 +166,10 @@ def process_video(
 
     # Cleanup
     cap.release()
-    writer.release()
+    writer.close()
 
     # Compute KPIs
-    top1_class = None
-    if top_class_counts:
-        top1_class = max(top_class_counts.items(), key=lambda kv: kv[1])[0]
+    top1_class = max(top_class_counts.items(), key=lambda kv: kv[1])[0] if top_class_counts else None
 
     kpis: Kpis = {
         "total_detections": total_detections,

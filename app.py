@@ -1,5 +1,7 @@
+# app.py  (or streamlit_app.py)
+
 """
-Minimal Streamlit UI for Traffic Sign and Speed Violation Detector.
+Minimal Streamlit UI for Traffic Sign & Speed Violation Detector.
 - Sidebar: speed slider, sample picker, video upload
 - Main: preview + meta, single 'Process Video' button
 - Progress: shows decoding/inference progress (approx via frames)
@@ -16,37 +18,60 @@ from PIL import Image
 from io import StringIO
 from huggingface_hub import hf_hub_download
 
-# Ensure local imports (e.g. utils) are imported correctly even if project is not launcehd from root directory
+# ──────────────────────────────────────────────────────────────────────────────
+# Page config MUST be the first Streamlit command
+# ──────────────────────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Traffic Sign & Speed Violation Detector",
+    page_icon="🚦",
+    layout="wide",
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Ensure local imports (e.g., utils) resolve even if launched from elsewhere
+# ──────────────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in os.sys.path:
     os.sys.path.insert(0, str(ROOT))
 
-# Local imports
-from utils import process_video, get_sample_videos, get_video_meta, save_upload_to_tmp, format_duration
+# Local imports (expected in utils.py)
+from utils import (
+    process_video,
+    get_sample_videos,
+    get_video_meta,
+    save_upload_to_tmp,
+    format_duration,
+)
 
-# download from HF repo
+# ──────────────────────────────────────────────────────────────────────────────
+# Model weights (download from HF once; path returned is local)
+# ──────────────────────────────────────────────────────────────────────────────
 model_path = hf_hub_download(
     repo_id="WahburRehman/traffic-sign-detector",
     filename="model.pt"
 )
 
-# ---------- Constants ----------
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Constants
+# ──────────────────────────────────────────────────────────────────────────────
 ASSETS_DIR = ROOT / "assets"
 SAMPLES_DIR = ASSETS_DIR / "samples"
 
-# ---------- Session States ----------
-
-# Initialize session state variables
+# ──────────────────────────────────────────────────────────────────────────────
+# Session state
+# ──────────────────────────────────────────────────────────────────────────────
 if "processing" not in st.session_state:
     st.session_state.processing = False
 if "uploaded_file" not in st.session_state:
     st.session_state.uploaded_file = None
 if "chosen_sample_path" not in st.session_state:
     st.session_state.chosen_sample_path = None
+if "result_ver" not in st.session_state:
+    st.session_state.result_ver = 0
 
-# ---------- Helper Functions ----------
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def video_thumb(path: Path) -> Image.Image | None:
     cap = cv2.VideoCapture(str(path))
@@ -54,13 +79,44 @@ def video_thumb(path: Path) -> Image.Image | None:
     cap.release()
     if not ok or frame is None:
         return None
-    # Convert BGR -> RGB and downscale for sidebar
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     h, w, _ = rgb.shape
     scale = 200 / max(h, w) if max(h, w) > 200 else 1.0
     if scale < 1.0:
-        rgb = cv2.resize(rgb, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
+        rgb = cv2.resize(rgb, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     return Image.fromarray(rgb)
+
+
+def render_video_meta_compact(meta: dict | None):
+    if not meta:
+        st.write("-")
+        return
+    fps = f"{meta.get('fps', '—')}"
+    frames = f"{meta.get('frames', '—')}"
+    res = meta.get('resolution', '—')
+    dur_s = meta.get('duration_sec')
+    dur = format_duration(dur_s)
+
+    st.markdown("""
+    <style>
+    .kpi-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+    .kpi{
+      padding:10px 12px;border:1px solid #EEE;border-radius:12px;
+      background:rgba(0,0,0,0.02);
+    }
+    .kpi .label{font-size:12px;color:#666;margin-bottom:4px;}
+    .kpi .val{font-size:18px;font-weight:600;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="kpi-grid">
+      <div class="kpi"><div class="label">FPS</div><div class="val">{fps}</div></div>
+      <div class="kpi"><div class="label">Frames</div><div class="val">{frames}</div></div>
+      <div class="kpi"><div class="label">Resolution</div><div class="val">{res}</div></div>
+      <div class="kpi"><div class="label">Duration</div><div class="val">{dur}</div></div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def render_results():
@@ -74,13 +130,19 @@ def render_results():
     with c2: st.metric("Total violations", int(res["kpis"].get("total_violations", 0)))
     with c3: st.metric("Top class", str(res["kpis"].get("top_class") or "—"))
 
-    # Create temp file for stable video preview
-    if "preview_temp_path" not in st.session_state:
-        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as f:
-            f.write(res["video_bytes"])
-            st.session_state.preview_temp_path = f.name
+    # Always refresh preview temp file for the current result
+    old = st.session_state.pop("preview_temp_path", None)
+    if old and os.path.exists(old):
+        try:
+            os.unlink(old)
+        except:
+            pass
 
-    # Annotated video
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        f.write(res["video_bytes"])
+        st.session_state.preview_temp_path = f.name
+
+    # Annotated video (fresh temp path each time)
     st.subheader("Annotated output")
     st.video(st.session_state.preview_temp_path)
 
@@ -115,7 +177,6 @@ def render_results():
 
 
 def cleanup_temp_files():
-    # Clean up temp files when session ends
     if "preview_temp_path" in st.session_state:
         try:
             if os.path.exists(st.session_state.preview_temp_path):
@@ -123,55 +184,50 @@ def cleanup_temp_files():
         except:
             pass
 
-# Register cleanup
 atexit.register(cleanup_temp_files)
 
-# ---------- CSS ----------
+# ──────────────────────────────────────────────────────────────────────────────
+# Minimal styling
+# ──────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* reduce main container padding */
 div.block-container { padding-top: 2rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Page config ----------
-st.set_page_config(
-    page_title="Traffic Sign and Speed Violation Detector",
-    page_icon="🚦",
-    layout="wide",
-)
-
-st.title("🚦 Traffic Sign and Speed Violation Detector")
+# ──────────────────────────────────────────────────────────────────────────────
+# Page header
+# ──────────────────────────────────────────────────────────────────────────────
+st.title("🚦 Traffic Sign & Speed Violation Detector")
 st.caption("Select or upload a video, set speed, and process to get an annotated output with detections.")
 
-# ---------- Sidebar ----------
+# ──────────────────────────────────────────────────────────────────────────────
+# Sidebar
+# ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Controls")
     speed_kmh = st.slider("Vehicle speed (km/h)", 0, 200, 50, 1)
 
     st.subheader("Sample videos")
     samples = get_sample_videos(SAMPLES_DIR)
-    if "chosen_sample_path" not in st.session_state:
-        st.session_state.chosen_sample_path = None
     uploaded = None
+
     if samples:
         cols = st.columns(1) if len(samples) == 1 else st.columns(2)
         for i, p in enumerate(samples):
             col = cols[i % len(cols)]
             with col:
-                # Create a container to group image and button closely
                 with st.container():
                     img = video_thumb(p)
                     if img is not None:
-                        # Use full column width for both image and button
                         st.image(img, caption=p.name, width='stretch')
-                    
-                    # sample video select button
-                    if st.button(f"Select", key=f"use_{p.stem}", width='stretch'):
-                        # Clear uploaded file when selecting a sample
+
+                    if st.button("Select", key=f"use_{p.stem}", width='stretch'):
                         st.session_state.chosen_sample_path = str(p)
                         st.session_state.uploaded_file = None
                         st.session_state.pop("result", None)
+                        st.session_state.pop("preview_temp_path", None)
+                        st.session_state.processing = False
                         st.rerun()
     else:
         st.caption("No samples found in ./assets/samples")
@@ -181,63 +237,43 @@ with st.sidebar:
     uploaded = st.file_uploader(" ", type=["mp4", "mov", "avi", "mkv"], key="file_uploader")
     st.markdown("**Format tip:** MP4 (H.264) at 720p works best. Size ≤ 50 MB.")
     if uploaded is not None:
+        # Only react if a *new* file arrived
         if st.session_state.uploaded_file != uploaded:
+            # RESET STATE COMPLETELY when uploading a new file
             st.session_state.uploaded_file = uploaded
             st.session_state.chosen_sample_path = None
             st.session_state.pop("result", None)
+            st.session_state.pop("preview_temp_path", None)
+            st.session_state.processing = False
             st.rerun()
     else:
-        st.session_state.uploaded_file = None
+        # Also reset when file uploader is cleared
+        if st.session_state.uploaded_file is not None:
+            st.session_state.uploaded_file = None
+            st.session_state.pop("result", None)
+            st.session_state.pop("preview_temp_path", None)
+            st.session_state.processing = False
+            st.rerun()
 
-
-# Decide input video path
-input_path = None
+# ──────────────────────────────────────────────────────────────────────────────
+# Decide input path (upload has precedence over sample)
+# ──────────────────────────────────────────────────────────────────────────────
+input_path: Path | None = None
 
 if st.session_state.get("uploaded_file") is not None:
-    # Uploaded file has highest priority
-    uploaded = st.session_state.uploaded_file
-    input_path = save_upload_to_tmp(uploaded)
+    input_path = save_upload_to_tmp(st.session_state.uploaded_file)
 elif st.session_state.get("chosen_sample_path"):
-    # Fall back to sample if no uploaded file
     input_path = Path(st.session_state.chosen_sample_path)
 
-# ---------- Main area: preview + meta ----------
+# ──────────────────────────────────────────────────────────────────────────────
+# Main layout: preview + metadata
+# ──────────────────────────────────────────────────────────────────────────────
 col_left, col_right = st.columns([2, 1], gap="large")
-
-def render_video_meta_compact(meta: dict | None):
-    if not meta:
-        st.write("-")
-        return
-    fps = f"{meta.get('fps', '—')}"
-    frames = f"{meta.get('frames', '—')}"
-    res = meta.get('resolution', '—')
-    dur_s = meta.get('duration_sec')
-    dur = format_duration(dur_s)
-
-    st.markdown("""
-    <style>
-    .kpi-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-    .kpi{
-      padding:10px 12px;border:1px solid #EEE;border-radius:12px;
-      background:rgba(0,0,0,0.02);
-    }
-    .kpi .label{font-size:12px;color:#666;margin-bottom:4px;}
-    .kpi .val{font-size:18px;font-weight:600;}
-    </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown(f"""
-    <div class="kpi-grid">
-      <div class="kpi"><div class="label">FPS</div><div class="val">{fps}</div></div>
-      <div class="kpi"><div class="label">Frames</div><div class="val">{frames}</div></div>
-      <div class="kpi"><div class="label">Resolution</div><div class="val">{res}</div></div>
-      <div class="kpi"><div class="label">Duration</div><div class="val">{dur}</div></div>
-    </div>
-    """, unsafe_allow_html=True)
 
 with col_left:
     st.subheader("Preview")
     if input_path is not None and input_path.exists():
+        # If stale caching ever appears, switch to: st.video(Path(input_path).read_bytes())
         st.video(str(input_path))
     else:
         st.info("Pick a sample or upload a video to begin.")
@@ -250,50 +286,55 @@ with col_right:
     else:
         st.write("-")
 
-# ---------- Process button ----------
+# ──────────────────────────────────────────────────────────────────────────────
+# Process button
+# ──────────────────────────────────────────────────────────────────────────────
 st.divider()
-# Disable button if no video selected OR if processing is in progress
 process_disabled = (input_path is None) or st.session_state.processing
 process_clicked = st.button("▶️ Process Video", type="primary", width='stretch', disabled=process_disabled)
 
-# Handle process button click
 if process_clicked and not st.session_state.processing:
+    st.session_state.processing = True
+    st.session_state.pop("result", None)
+    old = st.session_state.pop("preview_temp_path", None)
+    if old and os.path.exists(old):
+        try:
+            os.unlink(old)
+        except:
+            pass
     st.session_state.processing = True
     st.rerun()
 
-# ---------- Results placeholders ----------
+# Placeholders for progress
 prog = st.empty()
 prog_text = st.empty()
 
-# ---------- Run pipeline when clicked ----------
+# ──────────────────────────────────────────────────────────────────────────────
+# Run pipeline when processing is flagged
+# ──────────────────────────────────────────────────────────────────────────────
 if st.session_state.processing and input_path is not None:
-    # Set processing flag and clear previous results
     st.session_state.processing = True
     st.session_state.pop("result", None)
-    
-    # Clear the progress placeholders for a clean start
+
     prog.empty()
     prog_text.empty()
-    
+
     if not os.path.exists(model_path):
         st.error(f"Model weights not found: {model_path}")
         st.session_state.processing = False
         st.stop()
 
-    # Streamlit progress bar expects values 0..100
-    progress_bar = prog.progress(0, text="Starting...")
+    progress_bar = prog.progress(0, text="Starting…")
     start_time = time.time()
 
     def progress_cb(done: int, total: int, fps_est: float):
-        # Update bar and a small status line
-        percentage = int((done / total) * 100) if total and total > 0 else 0
-        progress_bar.progress(min(max(percentage, 0), 100), text=f"Processing… {percentage}%")
+        pct = int((done / total) * 100) if total and total > 0 else 0
+        progress_bar.progress(min(max(pct, 0), 100), text=f"Processing… {pct}%")
         prog_text.caption(f"Frames: {done}/{total}  |  Processing speed: {fps_est:.1f} FPS")
 
-    # Run core processing
     try:
-        # Process in memory - no permanent files
-        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=True) as temp_output:
+        # Process to a temporary file; we'll read bytes and discard the file
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as temp_output:
             kpis, events = process_video(
                 video_path=str(input_path),
                 model_path=str(model_path),
@@ -301,16 +342,14 @@ if st.session_state.processing and input_path is not None:
                 output_path=temp_output.name,
                 progress_cb=progress_cb,
             )
-            
-            # Read the result into memory
             temp_output.seek(0)
             video_bytes = temp_output.read()
 
-        # Convert events to CSV bytes
+        # CSV bytes
         df = pd.DataFrame(events)
-        csv_buffer = StringIO()
-        df.to_csv(csv_buffer, index=False)
-        csv_bytes = csv_buffer.getvalue().encode('utf-8')
+        csv_buf = StringIO()
+        df.to_csv(csv_buf, index=False)
+        csv_bytes = csv_buf.getvalue().encode("utf-8")
 
     except Exception as e:
         prog.empty()
@@ -319,19 +358,21 @@ if st.session_state.processing and input_path is not None:
         st.exception(e)
         st.stop()
 
-    # Store results in session state
+    # Save result to state
     st.session_state["result"] = {
         "video_bytes": video_bytes,
-        "csv_bytes": csv_bytes, 
+        "csv_bytes": csv_bytes,
         "kpis": kpis,
     }
+    st.session_state.result_ver += 1
 
     total_secs = time.time() - start_time
     progress_bar.progress(100, text="Done")
     prog_text.caption(f"Completed in {total_secs:.1f}s")
     st.session_state.processing = False
 
-
-# Only render results if we're not currently processing
+# ──────────────────────────────────────────────────────────────────────────────
+# Render results if available
+# ──────────────────────────────────────────────────────────────────────────────
 if "result" in st.session_state and not st.session_state.processing:
     render_results()
