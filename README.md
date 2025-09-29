@@ -59,22 +59,25 @@ You can directly download the trained model weights here:
 
 ## ⚙️ Installation
 **Clone the repository:**
-
+```bash
 git clone https://github.com/WahburRehman/traffic-sign-and-speed-violation-detector.git
 cd traffic-sign-violation-detector
-
+```
 **Create and activate environment:**
+```bash
 conda create -n traffic_sign_detection python=3.10 -y
 conda activate traffic_sign_detection
-
+```
 **Install dependencies:**
+```bash
 pip install -r requirements.txt
-
+```
 ---
 
 ## 🚀 Usage
+```bash
 streamlit run app.py
-
+```
 ---
 
 ## 🙌 Acknowledgements
